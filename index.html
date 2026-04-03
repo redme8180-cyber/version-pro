@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Rapport Télécom Pro V2.5</title>
+    
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#3498db">
+    <link rel="apple-touch-icon" href="https://cdn-icons-png.flaticon.com/512/854/854878.png">
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.25/jspdf.plugin.autotable.min.js"></script>
+
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; display: flex; flex-direction: column; height: 100vh; background: #ecf0f1; }
+        #map { flex-grow: 1; width: 100%; z-index: 1; }
+        .controls { padding: 15px; background: #ffffff; border-top: 3px solid #3498db; box-shadow: 0 -4px 15px rgba(0,0,0,0.2); z-index: 10; }
+        .status-bar { font-size: 13px; font-weight: bold; margin-bottom: 12px; text-align: center; padding: 5px; border-radius: 4px; background: #f8f9fa; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        input, select, button { padding: 12px; border-radius: 8px; border: 1px solid #dcdde1; font-size: 15px; outline: none; }
+        button { cursor: pointer; font-weight: bold; border: none; color: white; transition: all 0.2s; text-transform: uppercase; }
+        
+        .btn-save { background: #3498db; box-shadow: 0 4px #2980b9; }
+        .btn-save:active { transform: translateY(2px); box-shadow: 0 2px #2980b9; }
+        .btn-wa { background: #27ae60; box-shadow: 0 4px #219150; }
+        .btn-pdf { background: #e67e22; box-shadow: 0 4px #d35400; }
+        .btn-reset { background: #7f8c8d; grid-column: span 2; margin-top: 5px; font-size: 11px; padding: 8px; }
+        
+        button:disabled { background: #bdc3c7 !important; box-shadow: none !important; cursor: not-allowed; opacity: 0.7; }
+        
+        .direction-arrow { transition: transform 0.1s linear; }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<div class="controls">
+    <div id="gpsStatus" class="status-bar">🛰️ RECHERCHE SATELLITES...</div>
+    
+    <div class="grid" style="margin-bottom: 12px;">
+        <select id="type">
+            <option value="Armoire">📦 ARMOIRE (SR)</option>
+            <option value="Poteau">🪵 POTEAU</option>
+            <option value="Chambre">🕳️ CHAMBRE</option>
+            <option value="Client">🏠 CLIENT</option>
+        </select>
+        <input type="text" id="idName" placeholder="ID DU SITE">
+    </div>
+
+    <div class="grid">
+        <button id="btnSave" class="btn-save" onclick="saveOnly()" disabled>💾 ENREGISTRER</button>
+        <button id="btnWA" class="btn-wa" onclick="sendToWhatsApp()">💬 WHATSAPP</button>
+        <button class="btn-pdf" onclick="generatePDF()">📄 RAPPORT PDF</button>
+        <button class="btn-reset" onclick="resetFullReport()">♻️ VIDER LA CARTE / RESET</button>
+    </div>
+</div>
+
+<script>
+// --- CONFIGURATION & SÉCURITÉ ---
+const SUPERVISOR_PHONE = '212123456789'; // Ton numéro
+const EXPIRY_DATE = new Date('2026-04-19');
+
+// Enregistrement PWA Service Worker
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js').catch(err => console.log("SW Error", err));
+}
+
+// --- VARIABLES ---
+let map, mainMarker, accuracyCircle;
+let currentCoords = null, currentAccuracy = null, isLocationValid = false;
+let historyMarkers = [];
+
+// Vérification Date
+if (new Date() > EXPIRY_DATE) {
+    document.body.innerHTML = "<div style='text-align:center;padding:50px;'><h2>⌛ LICENCE EXPIRÉE</h2><p>Contactez l'administrateur.</p></div>";
+} else {
+    initMap();
+    startTracking();
+    displayHistoryOnMap();
+}
+
+function initMap() {
+    map = L.map('map', { zoomControl: false }).setView([35.7578, -5.8312], 13); // Centré Tanger
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+
+    const arrowIcon = L.divIcon({
+        className: 'direction-arrow',
+        html: '<div style="font-size:35px; color:#3498db; text-shadow: 0 0 5px white;">▲</div>',
+        iconSize: [30, 30], iconAnchor: [15, 15]
+    });
+
+    mainMarker = L.marker([35.7578, -5.8312], { icon: arrowIcon }).addTo(map);
+    accuracyCircle = L.circle([35.7578, -5.8312], { radius: 0, color: '#3498db', fillOpacity: 0.15 }).addTo(map);
+}
+
+function startTracking() {
+    const statusLabel = document.getElementById('gpsStatus');
+    const btnSave = document.getElementById('btnSave');
+
+    navigator.geolocation.watchPosition(pos => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        const acc = pos.coords.accuracy;
+
+        currentCoords = `${lat.toFixed(6)},${lon.toFixed(6)}`;
+        currentAccuracy = acc.toFixed(1);
+
+        if (acc <= 10) {
+            isLocationValid = true;
+            btnSave.disabled = false;
+            statusLabel.innerHTML = `💎 SIGNAL OK (+/- ${currentAccuracy}m)`;
+            statusLabel.style.background = "#d4edda"; statusLabel.style.color = "#155724";
+        } else {
+            isLocationValid = false;
+            btnSave.disabled = true;
+            statusLabel.innerHTML = `🛰️ CALIBRATION... (+/- ${currentAccuracy}m)`;
+            statusLabel.style.background = "#fff3cd"; statusLabel.style.color = "#856404";
+        }
+
+        const latLng = [lat, lon];
+        mainMarker.setLatLng(latLng);
+        accuracyCircle.setLatLng(latLng).setRadius(acc);
+        map.setView(latLng, (acc <= 10 ? 19 : 17));
+
+    }, (err) => { statusLabel.innerHTML = "❌ GPS DÉSACTIVÉ"; }, { enableHighAccuracy: true, maximumAge: 0 });
+}
+
+// Boussole
+window.addEventListener('deviceorientationabsolute', (e) => {
+    if (e.alpha && mainMarker) {
+        const heading = 360 - e.alpha;
+        const el = mainMarker.getElement();
+        if(el) el.style.transform = `${el.style.transform.split('rotate')[0]} rotate(${heading}deg)`;
+    }
+}, true);
+
+function saveOnly() {
+    const report = {
+        time: new Date().toLocaleString('fr-FR'),
+        type: document.getElementById('type').value,
+        id: document.getElementById('idName').value || "SANS-ID",
+        gps: currentCoords,
+        acc: currentAccuracy
+    };
+    let history = JSON.parse(localStorage.getItem('telecom_data') || '[]');
+    history.push(report);
+    localStorage.setItem('telecom_data', JSON.stringify(history));
+    displayHistoryOnMap();
+    document.getElementById('idName').value = "";
+}
+
+function displayHistoryOnMap() {
+    historyMarkers.forEach(m => map.removeLayer(m));
+    historyMarkers = [];
+    const history = JSON.parse(localStorage.getItem('telecom_data') || '[]');
+    history.forEach(p => {
+        const latLng = p.gps.split(',').map(Number);
+        const hMarker = L.circleMarker(latLng, { radius: 8, fillColor: "#e74c3c", color: "#c0392b", weight: 2, fillOpacity: 0.9 }).addTo(map);
+        hMarker.bindPopup(`<b>${p.id}</b><br>${p.type}<br>${p.time}`);
+        historyMarkers.push(hMarker);
+    });
+}
+
+function sendToWhatsApp() {
+    if (!currentCoords) return alert("Attente signal GPS...");
+    const msg = `👷 *RAPPORT TERRAIN*%0A📍 Type: ${document.getElementById('type').value}%0A🆔 ID: ${document.getElementById('idName').value || "N/A"}%0A🛰️ Précision: ${currentAccuracy}m%0A🗺️ Lien: https://www.google.com/maps?q=${currentCoords}`;
+    window.open(`https://wa.me/${SUPERVISOR_PHONE}?text=${msg}`);
+}
+
+function generatePDF() {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    const data = JSON.parse(localStorage.getItem('telecom_data') || '[]');
+    if (data.length === 0) return alert("Aucune donnée enregistrée.");
+    doc.text("RAPPORT D'INTERVENTION TÉLÉCOM - TANGER", 14, 15);
+    const rows = data.map(p => [p.time, p.type, p.id, p.gps, p.acc + "m"]);
+    doc.autoTable({ head: [['Date/Heure', 'Type', 'ID Site', 'GPS', 'Préc.']], body: rows, startY: 25 });
+    doc.save(`Rapport_${new Date().toLocaleDateString()}.pdf`);
+}
+
+function resetFullReport() {
+    if (confirm("Voulez-vous vider la carte et l'historique ?")) {
+        localStorage.removeItem('telecom_data');
+        displayHistoryOnMap();
+    }
+}
+</script>
+</body>
+</html>

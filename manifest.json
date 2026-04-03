@@ -1,0 +1,18 @@
+{
+  "short_name": "TelecomPro",
+  "name": "Rapport Télécom Pro V2.5",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/854/854878.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ],
+  "start_url": "./index.html",
+  "background_color": "#f8f9fa",
+  "display": "standalone",
+  "scope": "./",
+  "theme_color": "#3498db",
+  "description": "Outil de relevé GPS Haute Précision pour techniciens."
+}
