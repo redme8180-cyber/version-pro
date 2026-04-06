@@ -1,3 +1,9 @@
+// Enregistrement du Service Worker pour le mode PWA
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js')
+    .then(() => console.log("PWA : Service Worker activé !"))
+    .catch(err => console.log("PWA : Erreur", err));
+}
 const CACHE_NAME = 'telecom-v2.5';
 const ASSETS = [
   './index.html',
